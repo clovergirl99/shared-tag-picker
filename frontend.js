@@ -285,7 +285,51 @@ function validColor(value) {
 }
 function characterIdFromCard(card) {
   const mount = card.querySelector('[data-spindle-mount="character_browser_card_actions"][data-spindle-scope]');
-  return characterIdFromActionScope(mount?.dataset.spindleScope ?? "");
+  return characterIdFromActionScope(mount?.dataset.spindleScope ?? "") ||
+    card.getAttribute("data-character-id") ||
+    card.querySelector("[data-character-id]")?.getAttribute("data-character-id") || null;
+}
+function characterCardResolver(characters) {
+  const byId = new Map(characters.map(character => [character.id, character]));
+  const byName = new Map;
+  const byImage = new Map;
+  const addUnique = (index, key, character) => {
+    if (!key) return;
+    if (!index.has(key)) index.set(key, character);
+    else if (index.get(key)?.id !== character.id) index.set(key, null);
+  };
+  for (const character of characters) {
+    addUnique(byName, character.name?.trim(), character);
+    for (const imageId of new Set([character.image_id, character.extensions?.avatar_crop_image_id]))
+      addUnique(byImage, imageId, character);
+  }
+  return (card) => {
+    const stableId = characterIdFromCard(card);
+    // Never substitute a name match for an explicit but unknown character ID.
+    if (stableId) return byId.get(stableId);
+    const image = card.querySelector('[class*="_imageWrap_"] img, [class*="_avatar_"] img');
+    const source = image?.getAttribute("src") || image?.getAttribute("data-src") || "";
+    let path = "";
+    try {
+      const base = new URL(document.baseURI || "http://lumiverse.local/");
+      const url = new URL(source, base);
+      if (url.origin === base.origin) path = url.pathname;
+    } catch {}
+    const avatar = path.match(/\/api\/v1\/characters\/([^/]+)\/avatar\/?$/);
+    if (avatar) {
+      try { return byId.get(decodeURIComponent(avatar[1])); } catch { return; }
+    }
+    const imageMatch = path.match(/\/api\/v1\/images\/([^/]+)\/?$/);
+    if (imageMatch) {
+      try {
+        const match = byImage.get(decodeURIComponent(imageMatch[1]));
+        if (match) return match;
+      } catch {}
+    }
+    const name = image?.alt?.trim() || card.querySelector('[class*="_name_"]')?.textContent?.trim();
+    // Legacy layouts without an ID are safe only when the name is unique.
+    return byName.get(name) || undefined;
+  };
 }
 async function fetchJson(path, init) {
   const response = await fetch(path, { credentials: "same-origin", headers: { Accept: "application/json", ...init?.body ? { "Content-Type": "application/json" } : {} }, ...init });
@@ -320,6 +364,8 @@ function setup(ctx) {
   let characters = [];
   const characterDetails = new Map;
   const characterDetailLoads = new Map;
+  let characterDataRevision = 0;
+  let disposed = false;
   let listHidden = false;
   let loading = null;
   let cardsLoading = null;
@@ -472,10 +518,13 @@ function setup(ctx) {
     cardInjections.clear();
   };
   const updateInjectedCreatorNotes = (character, error = false) => {
-    for (const wrapper of cardInjections.values()) {
+    const resolveCard = characterCardResolver(characters);
+    for (const [info, wrapper] of cardInjections) {
       const extra = wrapper.querySelector(".stp-card-extra");
       if (extra?.dataset.stpCharacterId !== character.id)
         continue;
+      const card = info.closest('[class*="_card_"], [class*="_row_"]');
+      if (!card || resolveCard(card)?.id !== character.id) continue;
       const notes = extra.querySelector(".stp-card-notes");
       if (!notes)
         continue;
@@ -486,12 +535,18 @@ function setup(ctx) {
   const loadCharacterDetail = (summary) => {
     if (characterDetails.has(summary.id) || characterDetailLoads.has(summary.id))
       return;
+    const revision = characterDataRevision;
     const request = fetchJson(`/api/v1/characters/${encodeURIComponent(summary.id)}`).then((detail) => {
+      if (disposed || revision !== characterDataRevision) return;
+      if (detail?.id !== summary.id) throw new Error("Character detail ID did not match the requested card");
       const complete = { ...summary, ...detail };
       characterDetails.set(summary.id, complete);
       updateInjectedCreatorNotes(complete);
-    }).catch(() => updateInjectedCreatorNotes(summary, typeof summary.creator_notes !== "string")).finally(() => {
-      characterDetailLoads.delete(summary.id);
+    }).catch(() => {
+      if (!disposed && revision === characterDataRevision)
+        updateInjectedCreatorNotes(summary, typeof summary.creator_notes !== "string");
+    }).finally(() => {
+      if (characterDetailLoads.get(summary.id) === request) characterDetailLoads.delete(summary.id);
     });
     characterDetailLoads.set(summary.id, request);
   };
@@ -499,17 +554,19 @@ function setup(ctx) {
     for (const [info, wrapper] of [...cardInjections])
       if (!info.isConnected || !wrapper.isConnected)
         cardInjections.delete(info);
-    const byId = new Map(characters.map((character) => [character.id, character]));
-    const byName = new Map(characters.filter((character) => character.name).map((character) => [character.name, character]));
+    const resolveCard = characterCardResolver(characters);
     const candidates = [
       ...document.querySelectorAll('[class*="_browser_"] [class*="_card_"]'),
       ...document.querySelectorAll('[class*="_browser_"] [class*="_row_"]:not(:has([class*="_card_"]))')
     ];
     for (const card of candidates) {
-      const image = card.querySelector('[class*="_imageWrap_"] img[alt], [class*="_avatar_"] img[alt]');
       const info = card.querySelector('[class*="_info_"]');
-      const stableId = characterIdFromCard(card);
-      const summary = (stableId ? byId.get(stableId) : undefined) ?? (image?.alt ? byName.get(image.alt) : undefined);
+      const summary = resolveCard(card);
+      const existing = info && cardInjections.get(info);
+      if (existing && existing.querySelector(".stp-card-extra")?.dataset.stpCharacterId !== summary?.id) {
+        ctx.dom.uninject(existing);
+        cardInjections.delete(info);
+      }
       const character = summary ? characterDetails.get(summary.id) ?? summary : undefined;
       if (!info || !character || cardInjections.has(info))
         continue;
@@ -571,8 +628,11 @@ function setup(ctx) {
       return Promise.resolve();
     cardsLoading = fetchAllCharacters().then((next) => {
       characters = next;
-      if (force)
+      if (force) {
+        characterDataRevision += 1;
         characterDetails.clear();
+        characterDetailLoads.clear();
+      }
       refreshCharacterCards();
     }).finally(() => {
       cardsLoading = null;
@@ -1435,7 +1495,10 @@ function setup(ctx) {
     }
   };
   const observer = new MutationObserver(queueScan);
-  observer.observe(document.body, { childList: true, subtree: true });
+  observer.observe(document.body, {
+    childList: true, subtree: true, attributes: true,
+    attributeFilter: ["data-spindle-scope", "data-character-id", "src", "data-src", "alt"]
+  });
   disposers.push(() => observer.disconnect());
   for (const event of ["CHARACTER_CREATED", "CHARACTER_EDITED", "CHARACTER_DELETED", "CHARACTER_DUPLICATED", "CHARACTER_LIBRARY_CHANGED", "CHAT_SWITCHED"])
     disposers.push(ctx.events.on(event, () => {
@@ -1450,6 +1513,8 @@ function setup(ctx) {
   }).catch(() => scan());
   scan();
   return () => {
+    disposed = true;
+    characterDataRevision += 1;
     observer.disconnect();
     clearCardInjections();
     library?.destroy();
@@ -1465,3 +1530,4 @@ function setup(ctx) {
 export {
   setup
 };
+

@@ -10,7 +10,7 @@ https://github.com/clovergirl99/shared-tag-picker
 
 Install and enable the extension. Grant its requested permissions if prompted.
 
-The checked-in frontend.js is the original compiled extension, unchanged. spindle.json points to it directly, so no build step is needed. The original ZIP is included with the original documentation and any available source files and tests.
+The checked-in frontend.js includes the current fixes. spindle.json points to it directly, so no build step is needed. The original ZIP is retained as a historical archive; update from GitHub for the latest fixes. Run npm ci and npm test to check creator-note identity regressions.
 
 ---
 
@@ -29,6 +29,8 @@ Version 2.0.4 restores each saved preference independently and mirrors category 
 Version 2.0.5 automatically recovers the richer of Lumiverse's category data and the local backup, then keeps a versioned category snapshot and up to five previous layouts for restart/update safety.
 
 Version 2.0.6 restores creator notes on character cards by matching current Lumiverse cards through their stable character IDs. If a character-list response omits full notes, the extension retrieves that character's complete record directly. Existing `.stp-card-*` CSS remains compatible.
+
+Version 2.0.7 fixes creator notes being mixed up on same-name cards. It identifies cards by character ID, or by an unambiguous character-avatar/image ID in legacy list layouts. Name matching is allowed only for a unique name. Reused card elements and delayed detail responses cannot attach another character's notes. When a legacy card exposes no unambiguous identity, the extension leaves notes unassigned instead of guessing. This changes the card display; it does not rewrite stored creator notes.
 
 ## What it does
 
@@ -85,3 +87,4 @@ Version 1.7.0 limits the public tag list to tags currently in use and hides Lumi
 Version 1.8.0 groups the **Add tag** popup by category, with sticky headers and color swatches, instead of one flat list.
 
 Version 1.9.0 adds category filter chips and a **Select multiple** mode to the **Add tag** popup.
+

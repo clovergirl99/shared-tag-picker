@@ -32,6 +32,8 @@ Version 2.0.6 restores creator notes on character cards by matching current Lumi
 
 Version 2.0.7 fixes creator notes being mixed up on same-name cards. It identifies cards by character ID, or by an unambiguous character-avatar/image ID in legacy list layouts. Name matching is allowed only for a unique name. Reused card elements and delayed detail responses cannot attach another character's notes. When a legacy card exposes no unambiguous identity, the extension leaves notes unassigned instead of guessing. This changes the card display; it does not rewrite stored creator notes.
 
+Version 2.0.8 shows creator notes as plain text in character grid/list previews. HTML formatting, common Markdown markers, link destinations, comments, and script/style contents are removed from the preview. Readable text, image alt text, and paragraph breaks are retained. The original creator notes stored on each character remain unchanged.
+
 ## What it does
 
 - Opens the complete tag library when the character editor's tag field is focused, even before you type.

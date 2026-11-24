@@ -124,3 +124,37 @@ test('a detail response for a different ID never appears on the requested card',
   assert.deepEqual(h.notes(), ['Creator notes unavailable']);
   h.destroy();
 });
+
+test('list previews strip HTML and Markdown without modifying saved creator notes', async () => {
+  const original = '# Creator notes\n\n<b>Bold</b> and **strong**, *emphasis*, __bold__, _italic_, ~~old~~ and `code`.\n\n[Read more](https://example.com)\n\n<div>First line<br>Second &amp; third</div>';
+  const record = summary('a', { creator_notes: original });
+  const before = structuredClone(record);
+  const pending = deferred();
+  const h = await harness([record], card({ id: 'a' }), () => pending.promise);
+  const expected = 'Creator notes\n\nBold and strong, emphasis, bold, italic, old and code.\n\nRead more\n\nFirst line\nSecond & third';
+  assert.deepEqual(h.notes(), [expected], 'summary preview is plain text');
+  pending.resolve({ ...record }); await settle();
+  assert.deepEqual(h.notes(), [expected], 'fetched detail is plain text too');
+  assert.deepEqual(record, before, 'stored notes are untouched');
+  assert.equal(h.document.querySelector('.stp-card-notes').querySelector('b, a'), null);
+  h.destroy();
+});
+
+for (const [name, raw, expected] of [
+  ['HTML blocks and entities', '<p>Hello&nbsp;<b>world</b></p><p>Next &lt; 3</p>', 'Hello world\n\nNext < 3'],
+  ['escaped HTML', '&lt;b&gt;Hello&lt;/b&gt; &amp; welcome', 'Hello & welcome'],
+  ['hidden HTML content', 'Hi<script>doNotRun()</script><style>.x{color:red}</style><!-- hidden --> there', 'Hi there'],
+  ['images and links', '![Portrait](https://example.com/a.png) [Website](https://example.com/path_(detail))', 'Portrait Website'],
+  ['reference links', '[Website][site]\n\n[site]: https://example.com', 'Website'],
+  ['lists and quotes', '> Quote\n- One\n- [x] Two\n1. Three', 'Quote\nOne\nTwo\nThree'],
+  ['fenced code', '```html\n<b>Hello</b>\n```', 'Hello'],
+  ['ordinary underscores and autolinks', 'snake_case and https://example.com/my_file <https://example.com>', 'snake_case and https://example.com/my_file https://example.com'],
+  ['escaped punctuation', '\\*literal\\* and **bold**', '*literal* and bold'],
+  ['formatting-only notes', '<b></b>\n---\n<style>hidden</style>', 'No creator notes'],
+]) {
+  test(`creator-note plain text: ${name}`, async () => {
+    const h = await harness([summary('a')], card({ id: 'a' }), () => ({ id: 'a', creator_notes: raw }));
+    assert.deepEqual(h.notes(), [expected]);
+    h.destroy();
+  });
+}

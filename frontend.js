@@ -280,6 +280,59 @@ function setReactInputValue(input, value) {
 function escapeHtml(value) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
+function creatorNotesPlainText(value) {
+  if (typeof value !== "string") return "";
+  // Parse in a detached template: formatting is never mounted in the page.
+  const blocks = new Set(["P", "DIV", "SECTION", "ARTICLE", "HEADER", "FOOTER", "BLOCKQUOTE", "LI", "UL", "OL", "TABLE", "TR", "PRE", "H1", "H2", "H3", "H4", "H5", "H6", "HR", "DETAILS", "SUMMARY"]);
+  const ignored = new Set(["SCRIPT", "STYLE", "TEMPLATE", "IFRAME", "OBJECT", "NOSCRIPT", "HEAD", "SVG", "CANVAS"]);
+  const readNode = (node) => {
+    if (node.nodeType === 3) return node.nodeValue || "";
+    if (node.nodeType !== 1 && node.nodeType !== 11) return "";
+    if (ignored.has(node.tagName)) return "";
+    if (node.tagName === "BR" || node.tagName === "HR") return "\n";
+    if (node.tagName === "IMG") return node.getAttribute("alt") || "";
+    const text = [...node.childNodes].map(readNode).join(node.tagName === "TR" ? " " : "");
+    return blocks.has(node.tagName) ? `\n${text}\n` : text;
+  };
+  let text = value.replace(/<((?:https?:\/\/|mailto:)[^\s>]+)>/gi, (_, url) => url.replace(/^mailto:/i, ""))
+    .replace(/<([^\s<>@]+@[^\s<>@]+\.[^\s<>@]+)>/g, "$1");
+  // A second pass handles notes that contain entity-escaped HTML tags.
+  for (let pass = 0; pass < 2; pass++) {
+    const template = document.createElement("template");
+    template.innerHTML = text;
+    text = readNode(template.content);
+    if (!/<\/?[a-z][^>]*>/i.test(text)) break;
+  }
+  const references = new Map;
+  text = text.replace(/^ {0,3}\[([^\]\n]+)\]:[^\n]*$/gm, (_, name) => {
+    references.set(name.trim().toLocaleLowerCase(), true);
+    return "";
+  });
+  // Protect escaped Markdown punctuation so literal asterisks remain literal.
+  let token = "STPESCAPEDPUNCT";
+  while (text.includes(token)) token += "X";
+  const escapes = [];
+  text = text.replace(/\\([\\`*{}\[\]()#+\-.!_>~|])/g, (_, char) => `${token}${escapes.push(char) - 1}END`);
+  text = text
+    .replace(/^ {0,3}(?:`{3,}|~{3,})[^\n]*$/gm, "")
+    .replace(/!?(?:\[([^\]\n]*)\])\((?:\\.|[^()\n]|\([^()\n]*\))*\)/g, "$1")
+    .replace(/!?\[([^\]\n]+)\]\[([^\]\n]*)\]/g, "$1")
+    .replace(/\[([^\]\n]+)\]/g, (match, name) => references.has(name.trim().toLocaleLowerCase()) ? name : match)
+    .replace(/^ {0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?$/gm, "$1")
+    .replace(/^ {0,3}(?:>[ \t]*)+/gm, "")
+    .replace(/^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|={3,})$/gm, "")
+    .replace(/^[ \t]*(?:[-+*]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/gm, "")
+    .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, "$2")
+    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, "$1")
+    .replace(/\*(?=\S)([^*\n]*?\S)\*/g, "$1")
+    .replace(/(^|[^\p{L}\p{N}_])_(?=\S)([^_\n]*?\S)_(?=$|[^\p{L}\p{N}_])/gu, "$1$2")
+    .replace(/(`+)([^`]*?)\1/g, "$2")
+    .replace(/^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*$/gm, "")
+    .replace(/^[ \t]*\|(.+)\|[ \t]*$/gm, (_, row) => row.replace(/\|/g, " "));
+  text = text.replace(new RegExp(`${token}(\\d+)END`, "g"), (_, index) => escapes[Number(index)]);
+  return text.replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
 function validColor(value) {
   return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
 }
@@ -528,7 +581,7 @@ function setup(ctx) {
       const notes = extra.querySelector(".stp-card-notes");
       if (!notes)
         continue;
-      notes.textContent = error ? "Creator notes unavailable" : character.creator_notes?.trim() || "No creator notes";
+      notes.textContent = error ? "Creator notes unavailable" : creatorNotesPlainText(character.creator_notes) || "No creator notes";
       notes.dataset.loading = "false";
     }
   };
@@ -582,7 +635,7 @@ function setup(ctx) {
         return `${separator}<span class="stp-card-group">${tagHtml}</span>`;
       }).join("");
       const notesKnown = typeof character.creator_notes === "string";
-      const notes = escapeHtml(notesKnown ? character.creator_notes.trim() || "No creator notes" : "Loading creator notes…");
+      const notes = escapeHtml(notesKnown ? creatorNotesPlainText(character.creator_notes) || "No creator notes" : "Loading creator notes…");
       const tagsHtml = groupHtml || '<span class="stp-card-empty">No tags</span>';
       const wrapper = ctx.dom.inject(info, `<div class="stp-card-extra" data-stp-character-id="${escapeHtml(character.id)}"><div class="stp-card-notes" data-loading="${String(!notesKnown)}" tabindex="0" role="region" aria-label="Creator notes for ${escapeHtml(character.name || "character")}">${notes}</div><div class="stp-card-tags">${tagsHtml}</div></div>`, "beforeend");
       wrapper.classList.add("stp-card-host");
